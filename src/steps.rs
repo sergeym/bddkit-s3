@@ -4,12 +4,14 @@
 use crate::client::Instance;
 use crate::reply::{Ctx, fatal};
 
-// No caller until Tasks 10-14 implement the step bodies and start reading
-// captures, docstrings, and tables.
-#[allow(dead_code)]
+// `ctx` already has a reader in `route`; the other three wait for Tasks 10-14
+// to implement the step bodies that read captures, doc strings and tables.
 pub struct Request {
+    #[allow(dead_code)]
     pub args: Vec<String>,
+    #[allow(dead_code)]
     pub docstring: Option<String>,
+    #[allow(dead_code)]
     pub table: Option<Vec<Vec<String>>>,
     pub ctx: Ctx,
 }
