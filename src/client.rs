@@ -8,6 +8,11 @@ pub struct Instance {
     pub bucket: Box<Bucket>,
     pub region: Region,
     pub access_key: String,
+    /// Kept only so `foreign_signature_should_be_rejected` can refuse to run
+    /// when the tester passed this bucket's own secret — that request would
+    /// succeed regardless of whether a genuinely foreign signature is
+    /// rejected, so comparing here is what keeps the assertion honest.
+    pub secret_key: String,
     pub path_style: bool,
     pub fixtures_dir: Option<String>,
 }
@@ -54,12 +59,12 @@ impl Instance {
             )?,
             region,
             access_key: config.access_key.clone(),
+            secret_key: config.secret_key.clone(),
             path_style: config.path_style,
             fixtures_dir: config.fixtures_dir.clone(),
         })
     }
 
-    #[allow(dead_code)]
     /// The same bucket signed with a different secret, for the assertion that
     /// a forged signature is refused.
     pub fn with_secret(&self, secret: &str) -> Result<Box<Bucket>, String> {
@@ -73,7 +78,6 @@ impl Instance {
         )
     }
 
-    #[allow(dead_code)]
     /// The same bucket with no credentials at all, for the assertion that
     /// anonymous access is denied.
     pub fn anonymous(&self) -> Result<Box<Bucket>, String> {

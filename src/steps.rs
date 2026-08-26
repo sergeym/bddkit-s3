@@ -57,14 +57,6 @@ impl Request {
     }
 }
 
-macro_rules! todo_step {
-    ($($name:ident),+ $(,)?) => {
-        $(fn $name(_instance: &Instance, _request: &Request) -> Result<String, String> {
-            Err(concat!(stringify!($name), " is not implemented yet").to_string())
-        })+
-    };
-}
-
 #[derive(Default, Debug)]
 pub struct Headers {
     pub content_type: Option<String>,
@@ -546,7 +538,78 @@ fn listing_should_contain(instance: &Instance, request: &Request) -> Result<Stri
     ))
 }
 
-todo_step!(presign, anonymous_should_be_denied, foreign_signature_should_be_rejected,);
+fn presign(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (method, key, seconds, name) = (
+        request.arg(0)?,
+        request.arg(1)?,
+        request.arg(2)?,
+        request.arg(3)?,
+    );
+    let seconds: u32 = seconds
+        .parse()
+        .map_err(|_| format!("{seconds:?} is not a number of seconds"))?;
+    let url = match method {
+        "GET" => instance.bucket.presign_get(key, seconds, None),
+        "PUT" => instance.bucket.presign_put(key, seconds, None, None),
+        other => return Err(format!("cannot presign a {other} url; use GET or PUT")),
+    }
+    .map_err(|e| format!("cannot presign {key}: {e}"))?;
+    Ok(passed_with(serde_json::json!({ name: url })))
+}
+
+/// 401 and 403 both mean "the server refused", and which one MinIO sends
+/// depends on the bucket policy. Both are the pass condition here.
+fn is_refusal(status: u16) -> bool {
+    status == 401 || status == 403
+}
+
+fn anonymous_should_be_denied(instance: &Instance, request: &Request) -> Result<String, String> {
+    let key = request.arg(0)?;
+    let public = instance.anonymous()?;
+    let response = public
+        .get_object(key)
+        .map_err(|e| format!("anonymous GET {key} failed: {e}"))?;
+    let status = response.status_code();
+    if is_refusal(status) {
+        return Ok(passed());
+    }
+    // A bucket that is readable by anyone is a finding, not a timing problem.
+    Ok(fatal(
+        &format!("anonymous GET {key} answered {status}, expected 401 or 403"),
+        Some(exchange_for(instance, "GET (anonymous)", key, status, response.bytes())),
+        &request.ctx,
+    ))
+}
+
+fn foreign_signature_should_be_rejected(
+    instance: &Instance,
+    request: &Request,
+) -> Result<String, String> {
+    let (key, secret) = (request.arg(0)?, request.arg(1)?);
+    if secret == instance.secret_key {
+        // Signed with the bucket's own secret, this request would succeed
+        // whether or not foreign signatures are rejected — it proves nothing.
+        return Err(
+            "the secret given to this step is the bucket's own configured secret; \
+             use a different one so a successful request actually means \
+             \"a foreign signature was accepted\""
+                .to_string(),
+        );
+    }
+    let forged = instance.with_secret(secret)?;
+    let response = forged
+        .get_object(key)
+        .map_err(|e| format!("GET {key} with a foreign signature failed: {e}"))?;
+    let status = response.status_code();
+    if is_refusal(status) {
+        return Ok(passed());
+    }
+    Ok(fatal(
+        &format!("GET {key} signed with a foreign secret answered {status}, expected 401 or 403"),
+        Some(exchange_for(instance, "GET (foreign signature)", key, status, response.bytes())),
+        &request.ctx,
+    ))
+}
 
 pub fn route(instance: &Instance, step_index: u32, request: &Request) -> String {
     let reply = match step_index {
@@ -710,5 +773,42 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
         assert_eq!(v["status"], "fatal");
         assert!(v["error"].as_str().expect("error").contains("colour"));
+    }
+
+    #[test]
+    fn presigning_publishes_a_signed_url_without_contacting_the_server() {
+        // Step 10 is `I presign a "<GET|PUT>" url for "<key>" valid for
+        // "<n>" seconds as "<var>"`. Presigning is pure signing — it must work
+        // against 127.0.0.1:1, which nothing is listening on.
+        let raw = crate::steps::route_for_test(
+            10,
+            &[
+                "GET".to_string(),
+                "report.pdf".to_string(),
+                "60".to_string(),
+                "url".to_string(),
+            ],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
+        assert_eq!(v["status"], "passed");
+        let url = v["vars"]["url"].as_str().expect("url");
+        assert!(url.contains("X-Amz-Signature="), "{url}");
+        assert!(url.contains("report.pdf"), "{url}");
+    }
+
+    #[test]
+    fn an_unknown_presign_method_is_refused() {
+        let raw = crate::steps::route_for_test(
+            10,
+            &[
+                "DELETE".to_string(),
+                "report.pdf".to_string(),
+                "60".to_string(),
+                "url".to_string(),
+            ],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
+        assert_eq!(v["status"], "fatal");
+        assert!(v["error"].as_str().expect("error").contains("DELETE"));
     }
 }
