@@ -170,6 +170,36 @@ pub extern "C" fn bddkit_drop_instance(handle: u64) -> *mut c_char {
     })
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn bddkit_dispatch(
+    handle: u64,
+    step_index: u32,
+    request: *const c_char,
+) -> *mut c_char {
+    guard("dispatch", move || {
+        let raw = input(request);
+        let value: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                return serde_json::json!({"status": "fatal", "error": e.to_string()}).to_string();
+            }
+        };
+        let parsed = steps::Request::parse(&value);
+        // The guard is dropped before the step runs. `route` performs S3
+        // round-trips, and holding the instance table across one would
+        // serialise every parallel feature file behind this single mutex and
+        // let a panic mid-step poison it for the rest of the run.
+        let instance = {
+            let mut table = INSTANCES.lock().expect("instances");
+            table.get_or_insert_with(HashMap::new).get(&handle).cloned()
+        };
+        let Some(instance) = instance else {
+            return serde_json::json!({"status": "fatal", "error": "unknown handle"}).to_string();
+        };
+        steps::route(&instance, step_index, &parsed)
+    })
+}
+
 /// # Safety
 /// `s` must be a pointer this library returned and has not yet freed.
 #[unsafe(no_mangle)]

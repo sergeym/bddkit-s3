@@ -6,11 +6,13 @@
 /// that a failure dump stays readable in a terminal.
 pub const MAX_INLINE_BODY: usize = 8 * 1024;
 
-// No caller until Task 9 wires dispatch into steps.rs.
-#[allow(dead_code)]
 pub struct Ctx {
     pub artifacts_dir: String,
+    // Read only once Tasks 10-14 implement steps that need a workspace path
+    // or debug-mode SQL/HTTP dumping.
+    #[allow(dead_code)]
     pub workspace_dir: String,
+    #[allow(dead_code)]
     pub debug: bool,
 }
 
@@ -121,8 +123,6 @@ pub fn not_yet(error: &str, exchange: Option<Exchange>, ctx: &Ctx) -> String {
 }
 
 /// The observation itself failed; retrying cannot help.
-// No caller until Task 9 wires dispatch into steps.rs.
-#[allow(dead_code)]
 pub fn fatal(error: &str, exchange: Option<Exchange>, ctx: &Ctx) -> String {
     serde_json::json!({
         "status": "fatal",
