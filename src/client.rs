@@ -3,9 +3,10 @@
 use crate::config::InstanceConfig;
 use s3::{Bucket, Region, creds::Credentials};
 
-// Scaffolding: the fields and the two alternative-credential constructors have
-// no reader until Task 9 routes dispatch into `steps.rs`. Remove this attribute
-// then — a stale allow hides the next real dead-code warning.
+// Scaffolding: no field is read, and the two alternative-credential
+// constructors have no caller, until Task 9 routes dispatch into `steps.rs`.
+// `connect` is deliberately NOT covered — it already has a caller, and an
+// allow spanning it would hide the day it loses one.
 #[allow(dead_code)]
 pub struct Instance {
     pub bucket: Box<Bucket>,
@@ -33,7 +34,6 @@ fn bucket_for(
     Ok(if path_style { bucket.with_path_style() } else { bucket })
 }
 
-#[allow(dead_code)]
 impl Instance {
     /// Opens nothing: `Bucket` is a description of where to send requests, and
     /// the first request is sent by the first step. A MinIO that is down is
@@ -63,6 +63,7 @@ impl Instance {
         })
     }
 
+    #[allow(dead_code)]
     /// The same bucket signed with a different secret, for the assertion that
     /// a forged signature is refused.
     pub fn with_secret(&self, secret: &str) -> Result<Box<Bucket>, String> {
@@ -76,6 +77,7 @@ impl Instance {
         )
     }
 
+    #[allow(dead_code)]
     /// The same bucket with no credentials at all, for the assertion that
     /// anonymous access is denied.
     pub fn anonymous(&self) -> Result<Box<Bucket>, String> {
