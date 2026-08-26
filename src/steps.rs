@@ -457,15 +457,96 @@ fn should_have_metadata(instance: &Instance, request: &Request) -> Result<String
     })
 }
 
-todo_step!(
-    delete_prefix,
-    count_prefix,
-    presign,
-    count_should_be,
-    listing_should_contain,
-    anonymous_should_be_denied,
-    foreign_signature_should_be_rejected,
-);
+/// Every key under a prefix. `list` already follows the continuation token, so
+/// pagination never reaches a step or a tester — it returns one entry per page
+/// and the keys are flattened out of them here.
+///
+/// A non-2xx response is unrecoverable as evidence here: `rust-s3`'s `list`
+/// parses every page body as XML `ListBucketResult` regardless of status
+/// (confirmed in `rust-s3` 0.37.2's `Bucket::list_page`, which calls
+/// `quick_xml::de::from_reader` on the raw response unconditionally), so an S3
+/// error document (e.g. on a 403) fails that parse and surfaces as a generic
+/// deserialization `Err` — the original status code and body are already gone
+/// by the time this function sees them. That is why a list failure below maps
+/// to `fatal` with no exchange, unlike every other step in this file.
+fn keys_under(instance: &Instance, prefix: &str) -> Result<Vec<String>, String> {
+    let pages = instance
+        .bucket
+        .list(prefix.to_string(), None)
+        .map_err(|e| format!("LIST {prefix} failed: {e}"))?;
+    Ok(pages
+        .into_iter()
+        .flat_map(|page| page.contents.into_iter().map(|object| object.key))
+        .collect())
+}
+
+/// Deletes serially and keeps going past a per-key refusal so one bad key
+/// cannot strand the rest of the prefix half-cleared; the first refusal is
+/// still reported as `fatal` once every key has been attempted, naming that
+/// key. This step is racy against a parallel file writing under the same
+/// prefix in the same way `bddkit`'s own `I delete all "<table>"` is —
+/// isolation here is by unique keys, not locking.
+fn delete_prefix(instance: &Instance, request: &Request) -> Result<String, String> {
+    let prefix = request.arg(0)?;
+    let mut first_failure = None;
+    for key in keys_under(instance, prefix)? {
+        let response = instance
+            .bucket
+            .delete_object(&key)
+            .map_err(|e| format!("DELETE {key} failed: {e}"))?;
+        let status = response.status_code();
+        if !(200..300).contains(&status) && status != 404 && first_failure.is_none() {
+            first_failure = Some((
+                format!("DELETE {key} answered {status}"),
+                exchange_for(instance, "DELETE", &key, status, response.bytes()),
+            ));
+        }
+    }
+    if let Some((error, exchange)) = first_failure {
+        return Ok(fatal(&error, Some(exchange), &request.ctx));
+    }
+    Ok(passed())
+}
+
+fn count_prefix(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (prefix, name) = (request.arg(0)?, request.arg(1)?);
+    let count = keys_under(instance, prefix)?.len();
+    Ok(passed_with(serde_json::json!({ name: count.to_string() })))
+}
+
+fn count_should_be(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (expected, prefix) = (request.arg(0)?, request.arg(1)?);
+    // The pattern captures `(\d+)`, so this can never fail in practice; kept
+    // as a reported error rather than an `unwrap`, because a step function
+    // panicking would take the whole plugin process down with it.
+    let expected: usize = expected
+        .parse()
+        .map_err(|_| format!("{expected:?} is not a number"))?;
+    let found = keys_under(instance, prefix)?.len();
+    if found == expected {
+        return Ok(passed());
+    }
+    Ok(not_yet(
+        &format!("the prefix {prefix:?} holds {found} objects, expected {expected}"),
+        None,
+        &request.ctx,
+    ))
+}
+
+fn listing_should_contain(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (prefix, key) = (request.arg(0)?, request.arg(1)?);
+    let keys = keys_under(instance, prefix)?;
+    if keys.iter().any(|k| k == key) {
+        return Ok(passed());
+    }
+    Ok(not_yet(
+        &format!("{key:?} is not under {prefix:?} yet; {} objects are", keys.len()),
+        None,
+        &request.ctx,
+    ))
+}
+
+todo_step!(presign, anonymous_should_be_denied, foreign_signature_should_be_rejected,);
 
 pub fn route(instance: &Instance, step_index: u32, request: &Request) -> String {
     let reply = match step_index {
@@ -607,6 +688,16 @@ mod tests {
             !v["error"].as_str().expect("error").contains("not implemented"),
             "the step must actually run"
         );
+    }
+
+    #[test]
+    fn a_listing_that_cannot_reach_the_server_is_fatal() {
+        // Step 18 is `there should be "<n>" objects under "<prefix>"`.
+        let raw =
+            crate::steps::route_for_test(18, &["3".to_string(), "reports/".to_string()]);
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
+        assert_eq!(v["status"], "fatal");
+        assert!(!v["error"].as_str().expect("error").contains("not implemented"));
     }
 
     #[test]
