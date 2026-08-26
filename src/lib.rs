@@ -10,11 +10,16 @@ mod steps;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A handle is an index into this table, never a pointer.
-static INSTANCES: Mutex<Option<HashMap<u64, client::Instance>>> = Mutex::new(None);
+/// Instances are held behind `Arc` so a step never runs while this lock is
+/// held: dispatch clones the `Arc` out and releases the guard before touching
+/// the network. Holding it across an S3 round-trip would serialise every
+/// parallel feature file behind one mutex, and a panic mid-step would poison
+/// the table for the rest of the run.
+static INSTANCES: Mutex<Option<HashMap<u64, Arc<client::Instance>>>> = Mutex::new(None);
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 /// Outside `guard`, and safe there only because it provably cannot panic:
@@ -144,7 +149,7 @@ pub extern "C" fn bddkit_init_instance(request: *const c_char) -> *mut c_char {
             .lock()
             .expect("instances")
             .get_or_insert_with(HashMap::new)
-            .insert(handle, instance);
+            .insert(handle, Arc::new(instance));
         serde_json::json!({"ok": true, "handle": handle}).to_string()
     })
 }
