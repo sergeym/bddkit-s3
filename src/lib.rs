@@ -11,14 +11,10 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A handle is an index into this table, never a pointer.
-// Unread until Task 6 creates instances in `bddkit_init_instance`.
-#[allow(dead_code)]
 static INSTANCES: Mutex<Option<HashMap<u64, client::Instance>>> = Mutex::new(None);
-// Unread until Task 6 creates instances in `bddkit_init_instance`.
-#[allow(dead_code)]
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 /// Outside `guard`, and safe there only because it provably cannot panic:
@@ -33,8 +29,6 @@ fn out(s: String) -> *mut c_char {
 }
 
 /// Inside `guard` at every call site.
-// Unread until Task 5 adds `bddkit_validate_config`, the first export taking a request.
-#[allow(dead_code)]
 fn input(p: *const c_char) -> String {
     if p.is_null() {
         return String::new();
@@ -103,6 +97,72 @@ pub extern "C" fn bddkit_manifest() -> *mut c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn bddkit_list_steps() -> *mut c_char {
     guard("envelope", steps_json)
+}
+
+/// Eager, at startup, for every declared instance, with nothing connected.
+/// Rejecting here is what turns a config typo into exit 2 before the first
+/// request instead of a failure halfway through the suite.
+#[unsafe(no_mangle)]
+pub extern "C" fn bddkit_validate_config(request: *const c_char) -> *mut c_char {
+    guard("envelope", move || {
+        let raw = input(request);
+        let value: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({"ok": false, "error": e.to_string()}).to_string(),
+        };
+        match config::InstanceConfig::parse(&value["config"]) {
+            Ok(_) => r#"{"ok":true}"#.to_string(),
+            Err(error) => serde_json::json!({"ok": false, "error": error}).to_string(),
+        }
+    })
+}
+
+/// Lazy: the first time a scenario runs an `s3` step with this instance
+/// selected. Under `shared` that is once for the whole run.
+///
+/// Every call must return a handle distinct from every live one: the host
+/// initialises without holding its lock, so two workers can arrive here at the
+/// same time and the loser's handle is dropped while the winner's stays in use.
+#[unsafe(no_mangle)]
+pub extern "C" fn bddkit_init_instance(request: *const c_char) -> *mut c_char {
+    guard("envelope", move || {
+        let raw = input(request);
+        let value: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({"ok": false, "error": e.to_string()}).to_string(),
+        };
+        let config = match config::InstanceConfig::parse(&value["config"]) {
+            Ok(c) => c,
+            Err(error) => return serde_json::json!({"ok": false, "error": error}).to_string(),
+        };
+        let instance = match client::Instance::connect(&config) {
+            Ok(i) => i,
+            Err(error) => return serde_json::json!({"ok": false, "error": error}).to_string(),
+        };
+        let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
+        INSTANCES
+            .lock()
+            .expect("instances")
+            .get_or_insert_with(HashMap::new)
+            .insert(handle, instance);
+        serde_json::json!({"ok": true, "handle": handle}).to_string()
+    })
+}
+
+/// Called for every initialised instance at the end of the run, on every exit
+/// path including a failed run and `--fail-fast`. Nothing here outlives the
+/// process, but the table entry is released so a leaked handle cannot be
+/// reused.
+#[unsafe(no_mangle)]
+pub extern "C" fn bddkit_drop_instance(handle: u64) -> *mut c_char {
+    guard("envelope", move || {
+        INSTANCES
+            .lock()
+            .expect("instances")
+            .get_or_insert_with(HashMap::new)
+            .remove(&handle);
+        r#"{"ok":true}"#.to_string()
+    })
 }
 
 /// # Safety
