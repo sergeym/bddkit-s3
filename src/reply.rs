@@ -103,9 +103,6 @@ pub fn passed_with(vars: serde_json::Value) -> String {
 /// may answer this, and only an armed eventual assertion gives it a second
 /// attempt — without one it is simply a failure, which is why the message must
 /// say what was observed.
-// No caller yet: all four steps in this task are actions, and an action must
-// never answer `not_yet` — only an assertion (a later task) may.
-#[allow(dead_code)]
 pub fn not_yet(error: &str, exchange: Option<Exchange>, ctx: &Ctx) -> String {
     serde_json::json!({
         "status": "not_yet",

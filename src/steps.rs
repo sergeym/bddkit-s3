@@ -3,7 +3,7 @@
 
 use crate::client::Instance;
 use crate::files;
-use crate::reply::{Ctx, Exchange, fatal, passed, passed_with};
+use crate::reply::{Ctx, Exchange, fatal, not_yet, passed, passed_with};
 
 pub struct Request {
     pub args: Vec<String>,
@@ -273,17 +273,194 @@ fn delete_object(instance: &Instance, request: &Request) -> Result<String, Strin
     ))
 }
 
+/// A HEAD reduced to what an assertion needs. `Err` is reserved for a
+/// transport failure, which no amount of waiting repairs.
+fn head(
+    instance: &Instance,
+    key: &str,
+) -> Result<(u16, s3::serde_types::HeadObjectResult), String> {
+    let (result, status) = instance
+        .bucket
+        .head_object(key)
+        .map_err(|e| format!("HEAD {key} failed: {e}"))?;
+    Ok((status, result))
+}
+
+fn should_exist(instance: &Instance, request: &Request) -> Result<String, String> {
+    let key = request.arg(0)?;
+    let (status, _) = head(instance, key)?;
+    if (200..300).contains(&status) {
+        return Ok(passed());
+    }
+    if status == 404 {
+        // The observation succeeded and said "not there, just now". An armed
+        // eventual assertion gets another attempt; without one this is a plain
+        // failure, which is why the message says what was seen.
+        return Ok(not_yet(&format!("{key} is not in the bucket yet"), None, &request.ctx));
+    }
+    Ok(fatal(
+        &format!("HEAD {key} answered {status}"),
+        Some(exchange_for(instance, "HEAD", key, status, &[])),
+        &request.ctx,
+    ))
+}
+
+fn should_not_exist(instance: &Instance, request: &Request) -> Result<String, String> {
+    let key = request.arg(0)?;
+    let (status, _) = head(instance, key)?;
+    if status == 404 {
+        return Ok(passed());
+    }
+    if (200..300).contains(&status) {
+        return Ok(not_yet(&format!("{key} is still in the bucket"), None, &request.ctx));
+    }
+    Ok(fatal(
+        &format!("HEAD {key} answered {status}"),
+        Some(exchange_for(instance, "HEAD", key, status, &[])),
+        &request.ctx,
+    ))
+}
+
+/// The body of an object for an assertion to inspect, or the reply to hand
+/// straight back because there is nothing to compare yet. Named variants
+/// instead of a nested `Result<Result<..>>` — same three outcomes, easier to
+/// match on.
+enum ObjectBody {
+    Present(String),
+    Reply(String),
+}
+
+fn body_for_assertion(instance: &Instance, key: &str, ctx: &Ctx) -> Result<ObjectBody, String> {
+    let (status, bytes) = get(instance, key)?;
+    if (200..300).contains(&status) {
+        // A binary object read as text compares nonsense either way; no
+        // amount of waiting turns it into UTF-8, so this is a hard failure
+        // rather than `not_yet` (same call `download_to_var` already makes).
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("{key} is not UTF-8; a text assertion cannot compare it"))?;
+        return Ok(ObjectBody::Present(text));
+    }
+    if status == 404 {
+        return Ok(ObjectBody::Reply(not_yet(
+            &format!("{key} is not in the bucket yet"),
+            None,
+            ctx,
+        )));
+    }
+    Ok(ObjectBody::Reply(fatal(
+        &format!("GET {key} answered {status}"),
+        Some(exchange_for(instance, "GET", key, status, &bytes)),
+        ctx,
+    )))
+}
+
+fn should_contain(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (key, needle) = (request.arg(0)?, request.arg(1)?);
+    let body = match body_for_assertion(instance, key, &request.ctx)? {
+        ObjectBody::Present(body) => body,
+        ObjectBody::Reply(reply) => return Ok(reply),
+    };
+    if body.contains(needle) {
+        return Ok(passed());
+    }
+    Ok(not_yet(&format!("{key} does not contain {needle:?}"), None, &request.ctx))
+}
+
+fn should_equal(instance: &Instance, request: &Request) -> Result<String, String> {
+    let key = request.arg(0)?;
+    let expected = request
+        .docstring
+        .as_deref()
+        .ok_or_else(|| "this step needs a doc string with the expected body".to_string())?;
+    let body = match body_for_assertion(instance, key, &request.ctx)? {
+        ObjectBody::Present(body) => body,
+        ObjectBody::Reply(reply) => return Ok(reply),
+    };
+    if body == expected {
+        return Ok(passed());
+    }
+    Ok(not_yet(&format!("{key} is {body:?}, expected {expected:?}"), None, &request.ctx))
+}
+
+/// The two string-valued HEAD-field assertions (content-type, metadata) share
+/// this body so they cannot drift apart; `should_have_size` compares numbers
+/// instead and is written separately below.
+fn head_field_should_be(
+    instance: &Instance,
+    request: &Request,
+    key: &str,
+    label: &str,
+    expected: &str,
+    actual: impl Fn(&s3::serde_types::HeadObjectResult) -> Option<String>,
+) -> Result<String, String> {
+    let (status, result) = head(instance, key)?;
+    if status == 404 {
+        return Ok(not_yet(&format!("{key} is not in the bucket yet"), None, &request.ctx));
+    }
+    if !(200..300).contains(&status) {
+        return Ok(fatal(
+            &format!("HEAD {key} answered {status}"),
+            Some(exchange_for(instance, "HEAD", key, status, &[])),
+            &request.ctx,
+        ));
+    }
+    let found = actual(&result).unwrap_or_default();
+    if found == expected {
+        return Ok(passed());
+    }
+    Ok(not_yet(
+        &format!("{key} has {label} {found:?}, expected {expected:?}"),
+        None,
+        &request.ctx,
+    ))
+}
+
+fn should_have_size(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (key, expected) = (request.arg(0)?, request.arg(1)?);
+    let expected: i64 = expected
+        .parse()
+        .map_err(|_| format!("{expected:?} is not a whole number of bytes"))?;
+    let (status, result) = head(instance, key)?;
+    if status == 404 {
+        return Ok(not_yet(&format!("{key} is not in the bucket yet"), None, &request.ctx));
+    }
+    if !(200..300).contains(&status) {
+        return Ok(fatal(
+            &format!("HEAD {key} answered {status}"),
+            Some(exchange_for(instance, "HEAD", key, status, &[])),
+            &request.ctx,
+        ));
+    }
+    let found = result.content_length.unwrap_or_default();
+    if found == expected {
+        return Ok(passed());
+    }
+    Ok(not_yet(
+        &format!("{key} has size {found}, expected {expected}"),
+        None,
+        &request.ctx,
+    ))
+}
+
+fn should_have_content_type(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (key, expected) = (request.arg(0)?, request.arg(1)?);
+    head_field_should_be(instance, request, key, "content type", expected, |r| {
+        r.content_type.clone()
+    })
+}
+
+fn should_have_metadata(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (key, name, expected) = (request.arg(0)?, request.arg(1)?, request.arg(2)?);
+    let label = format!("metadata {name:?}");
+    head_field_should_be(instance, request, key, &label, expected, |r| {
+        r.metadata.as_ref().and_then(|m| m.get(name).cloned())
+    })
+}
+
 todo_step!(
     delete_prefix,
     count_prefix,
     presign,
-    should_exist,
-    should_not_exist,
-    should_contain,
-    should_equal,
-    should_have_size,
-    should_have_metadata,
-    should_have_content_type,
     count_should_be,
     listing_should_contain,
     anonymous_should_be_denied,
@@ -413,6 +590,23 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
         assert_eq!(v["status"], "fatal");
         assert!(v["error"].as_str().expect("error").contains("escape.pdf"));
+    }
+
+    #[test]
+    fn an_assertion_that_cannot_reach_the_server_is_fatal_not_not_yet() {
+        // route_for_test points at 127.0.0.1:1, which refuses instantly.
+        // Step 11 is `object "<key>" should exist`.
+        let raw = crate::steps::route_for_test(11, &["report.pdf".to_string()]);
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
+        assert_eq!(
+            v["status"], "fatal",
+            "a refused connection is not something polling can fix; \
+             answering not_yet here would burn the tester's whole timeout"
+        );
+        assert!(
+            !v["error"].as_str().expect("error").contains("not implemented"),
+            "the step must actually run"
+        );
     }
 
     #[test]
