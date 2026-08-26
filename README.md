@@ -84,24 +84,36 @@ prefix), counting and listing under a prefix, presigning GET/PUT URLs, and
 assertions for existence, content, size, content type, metadata, listing
 membership, and access control (anonymous and foreign-signature refusal).
 
-## Running the end-to-end suite
+## Running the tests
 
-The acceptance gate for this plugin — the real `bddkit` binary, the real
-plugin loaded from a hand-written lock file, and a real MinIO — lives in the
-`bddkit` repository as `tests/s3.rs`, not in this one. It builds and points
-at whichever plugin manifest `BDDKIT_S3_PLUGIN_MANIFEST` names, so a clone of
-this repository is exercised by checking out `bddkit` alongside it and
-running the suite from there:
+**Unit tests** need nothing — no MinIO, no `bddkit`:
 
 ```bash
-# in the bddkit checkout, with a sibling checkout of this repository
-docker compose up -d minio-init   # from the bddkit-s3 repository, brings up MinIO
-BDDKIT_S3_PLUGIN_MANIFEST=../bddkit-s3/Cargo.toml \
-  cargo test --test s3 -- --test-threads=1
+cargo test --lib          # 37 tests
 ```
 
-Without the env var, `bddkit`'s test defaults to a `../bddkit-s3` sibling
-checkout and skips with an explanatory message if neither is present.
+**The end-to-end suite** (`tests/e2e.rs`) is the acceptance gate: the real
+`bddkit` binary, this plugin loaded from a hand-written lock file, and a real
+MinIO. It needs both of those present.
+
+```bash
+docker compose up minio-init                  # MinIO + the bucket; blocks until ready
+BDDKIT_BIN=/path/to/bddkit cargo test --test e2e
+```
+
+The `bddkit` binary is looked for in this order: `$BDDKIT_BIN`, then `bddkit`
+on `PATH`, then a sibling checkout's `../bddkit/target/debug/bddkit`. With none
+of them present the suite **skips** and prints why — it does not fail, so a
+clone with no host available still gets a green `cargo test`.
+
+`cargo test` on its own runs both: the unit tests, and the end-to-end suite if
+a host is reachable. Read its output rather than only its exit code — a skipped
+end-to-end suite is reported as passing.
+
+> **`cargo install bddkit` is not enough.** It installs the published release,
+> and no published version of bddkit carries the plugin ABI — `src/plugin/`
+> exists only on the unmerged plugin branch. Until that ships, build the host
+> from a checkout of that branch and point `BDDKIT_BIN` at the result.
 
 ## Known limits
 

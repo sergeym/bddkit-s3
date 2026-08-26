@@ -10,6 +10,20 @@ use std::path::{Component, Path, PathBuf};
 /// character. This is a trust boundary: without the check a feature file
 /// writes anywhere the CI user can write.
 pub fn in_workspace(workspace_dir: &str, name: &str) -> Result<PathBuf, String> {
+    // An older host sends no `workspace_dir`, and the payload parser turns the
+    // missing key into an empty string. Joining onto "" yields a bare relative
+    // path, so the step would quietly write into the process working directory
+    // — and two feature files would land on the same `report.pdf`, which is the
+    // exact collision this field exists to prevent. Fail loudly instead: a
+    // silent wrong answer here is worse than a refused step.
+    if workspace_dir.is_empty() {
+        return Err(
+            "the host sent no workspace directory, so this step cannot place a file \
+             for this feature file alone; it needs a bddkit new enough to send \
+             `workspace_dir` in the dispatch payload"
+                .to_string(),
+        );
+    }
     if name.is_empty() {
         return Err("the file name must not be empty".to_string());
     }
@@ -72,6 +86,15 @@ mod tests {
         ] {
             in_workspace("/tmp/ws", bad).expect_err("refused");
         }
+    }
+
+    #[test]
+    fn an_absent_workspace_is_refused_rather_than_falling_back_to_the_working_directory() {
+        let error = in_workspace("", "report.pdf").expect_err("refused");
+        assert!(
+            error.contains("workspace_dir"),
+            "the message must name the field a host upgrade supplies: {error}"
+        );
     }
 
     #[test]
