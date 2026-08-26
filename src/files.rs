@@ -9,8 +9,6 @@ use std::path::{Component, Path, PathBuf};
 /// interpolates to, and which `Path` would otherwise accept as an ordinary
 /// character. This is a trust boundary: without the check a feature file
 /// writes anywhere the CI user can write.
-// No caller until Task 10/11 wire the file steps into steps.rs.
-#[allow(dead_code)]
 pub fn in_workspace(workspace_dir: &str, name: &str) -> Result<PathBuf, String> {
     if name.is_empty() {
         return Err("the file name must not be empty".to_string());
@@ -33,8 +31,6 @@ pub fn in_workspace(workspace_dir: &str, name: &str) -> Result<PathBuf, String> 
 /// A prepared file. A relative path resolves against `fixtures_dir` when the
 /// instance declares one, and against the process working directory otherwise;
 /// an absolute path is used as given.
-// No caller until Task 10/11 wire the file steps into steps.rs.
-#[allow(dead_code)]
 pub fn fixture(fixtures_dir: &Option<String>, path: &str) -> PathBuf {
     let path = Path::new(path);
     match fixtures_dir {

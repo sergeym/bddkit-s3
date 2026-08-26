@@ -8,16 +8,12 @@ pub const MAX_INLINE_BODY: usize = 8 * 1024;
 
 pub struct Ctx {
     pub artifacts_dir: String,
-    // Read only once Tasks 10-14 implement steps that need a workspace path
-    // or debug-mode SQL/HTTP dumping.
-    #[allow(dead_code)]
     pub workspace_dir: String,
+    // Read only once later tasks implement debug-mode SQL/HTTP dumping.
     #[allow(dead_code)]
     pub debug: bool,
 }
 
-// No caller until Tasks 10-14 implement the step bodies.
-#[allow(dead_code)]
 pub struct Exchange {
     pub title: String,
     pub url: String,
@@ -95,13 +91,11 @@ fn diagnostics_of(exchange: Option<Exchange>, ctx: &Ctx) -> serde_json::Value {
     }
 }
 
-// No caller until Tasks 10-14 implement the step bodies.
-#[allow(dead_code)]
 pub fn passed() -> String {
     r#"{"status":"passed"}"#.to_string()
 }
 
-// No caller until Tasks 10-14 implement the step bodies.
+// No caller until a later task implements a step that reports vars back.
 #[allow(dead_code)]
 pub fn passed_with(vars: serde_json::Value) -> String {
     serde_json::json!({"status": "passed", "vars": vars}).to_string()
@@ -111,7 +105,8 @@ pub fn passed_with(vars: serde_json::Value) -> String {
 /// may answer this, and only an armed eventual assertion gives it a second
 /// attempt — without one it is simply a failure, which is why the message must
 /// say what was observed.
-// No caller until Tasks 10-14 implement the step bodies.
+// No caller yet: all four steps in this task are actions, and an action must
+// never answer `not_yet` — only an assertion (a later task) may.
 #[allow(dead_code)]
 pub fn not_yet(error: &str, exchange: Option<Exchange>, ctx: &Ctx) -> String {
     serde_json::json!({

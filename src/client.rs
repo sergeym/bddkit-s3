@@ -3,11 +3,7 @@
 use crate::config::InstanceConfig;
 use s3::{Bucket, Region, creds::Credentials};
 
-// Scaffolding: no field is read, and the two alternative-credential
-// constructors have no caller, until Task 9 routes dispatch into `steps.rs`.
-// `connect` is deliberately NOT covered — it already has a caller, and an
-// allow spanning it would hide the day it loses one.
-#[allow(dead_code)]
+// `bucket` and `fixtures_dir` are now read from `steps.rs`.
 pub struct Instance {
     pub bucket: Box<Bucket>,
     pub region: Region,
