@@ -95,8 +95,6 @@ pub fn passed() -> String {
     r#"{"status":"passed"}"#.to_string()
 }
 
-// No caller until a later task implements a step that reports vars back.
-#[allow(dead_code)]
 pub fn passed_with(vars: serde_json::Value) -> String {
     serde_json::json!({"status": "passed", "vars": vars}).to_string()
 }

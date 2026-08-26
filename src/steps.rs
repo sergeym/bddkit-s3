@@ -3,7 +3,7 @@
 
 use crate::client::Instance;
 use crate::files;
-use crate::reply::{Ctx, Exchange, fatal, passed};
+use crate::reply::{Ctx, Exchange, fatal, passed, passed_with};
 
 pub struct Request {
     pub args: Vec<String>,
@@ -74,7 +74,8 @@ pub struct Headers {
 /// Row 0 is the header row — the host does not strip it, and gherkin
 /// guarantees every row is as long as row 0. A row can still be empty if row
 /// 0 itself is (a degenerate table), so cells are read with `.first()`/`.get()`
-/// rather than indexed, to turn that into an error instead of a panic.
+/// rather than indexed. A missing cell reads as an empty string, which then
+/// fails the name check below — an error, never a panic.
 pub fn headers_from(table: &Option<Vec<Vec<String>>>) -> Result<Headers, String> {
     let mut headers = Headers::default();
     let Some(rows) = table else {
@@ -96,6 +97,18 @@ pub fn headers_from(table: &Option<Vec<Vec<String>>>) -> Result<Headers, String>
         }
     }
     Ok(headers)
+}
+
+/// The one place a failed request becomes evidence. The URL names the object,
+/// not just the bucket: a dump listing eight failures against one bucket is
+/// unreadable if every line shows the same URL.
+fn exchange_for(instance: &Instance, verb: &str, key: &str, status: u16, body: &[u8]) -> Exchange {
+    Exchange {
+        title: format!("{verb} {key}"),
+        url: format!("{}/{key}", instance.bucket.url().trim_end_matches('/')),
+        status,
+        body: String::from_utf8_lossy(body).into_owned(),
+    }
 }
 
 fn put(
@@ -124,12 +137,7 @@ fn put(
     // A refused write is not something waiting fixes.
     Ok(fatal(
         &format!("PUT {key} answered {status}"),
-        Some(Exchange {
-            title: format!("PUT {key}"),
-            url: instance.bucket.url(),
-            status,
-            body: String::from_utf8_lossy(response.bytes()).into_owned(),
-        }),
+        Some(exchange_for(instance, "PUT", key, status, response.bytes())),
         ctx,
     ))
 }
@@ -166,11 +174,106 @@ fn upload_saved(instance: &Instance, request: &Request) -> Result<String, String
     put(instance, request.arg(1)?, &body, &Headers::default(), &request.ctx)
 }
 
+/// One GET, with the status handed back rather than turned into an error:
+/// only the caller knows whether a 404 means `not_yet` or `fatal`.
+fn get(instance: &Instance, key: &str) -> Result<(u16, Vec<u8>), String> {
+    let response = instance
+        .bucket
+        .get_object(key)
+        .map_err(|e| format!("GET {key} failed: {e}"))?;
+    Ok((response.status_code(), response.bytes().to_vec()))
+}
+
+fn download_to_var(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (key, name) = (request.arg(0)?, request.arg(1)?);
+    let (status, body) = get(instance, key)?;
+    if !(200..300).contains(&status) {
+        return Ok(fatal(
+            &format!("GET {key} answered {status}"),
+            Some(exchange_for(instance, "GET", key, status, &body)),
+            &request.ctx,
+        ));
+    }
+    let text = String::from_utf8(body)
+        .map_err(|_| format!("{key} is not UTF-8; use `I save \"{key}\" as \"…\"` instead"))?;
+    Ok(passed_with(serde_json::json!({ name: text })))
+}
+
+fn save_to_workspace(instance: &Instance, request: &Request) -> Result<String, String> {
+    let key = request.arg(0)?;
+    // Checked before the request: a bad name is the tester's mistake, and
+    // finding out after a download wastes a round trip and reads worse.
+    let path = files::in_workspace(&request.ctx.workspace_dir, request.arg(1)?)?;
+    let (status, body) = get(instance, key)?;
+    if !(200..300).contains(&status) {
+        return Ok(fatal(
+            &format!("GET {key} answered {status}"),
+            Some(exchange_for(instance, "GET", key, status, &body)),
+            &request.ctx,
+        ));
+    }
+    std::fs::write(&path, &body).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(passed())
+}
+
+fn read_field(instance: &Instance, request: &Request) -> Result<String, String> {
+    let (field, key, name) = (request.arg(0)?, request.arg(1)?, request.arg(2)?);
+    // Checked before the request: an unknown field name is the tester's
+    // mistake, not something S3 can answer, and a HEAD round trip would only
+    // delay the same error.
+    if field != "etag"
+        && field != "size"
+        && field != "content-type"
+        && !field.starts_with("meta:")
+    {
+        return Err(format!(
+            "unknown field {field:?}: known fields are \"etag\", \"size\", \"content-type\" and \"meta:<name>\""
+        ));
+    }
+    let (head, status) = instance
+        .bucket
+        .head_object(key)
+        .map_err(|e| format!("HEAD {key} failed: {e}"))?;
+    if !(200..300).contains(&status) {
+        return Ok(fatal(
+            &format!("HEAD {key} answered {status}"),
+            Some(exchange_for(instance, "HEAD", key, status, &[])),
+            &request.ctx,
+        ));
+    }
+    let value = match field {
+        "etag" => head.e_tag.clone().unwrap_or_default(),
+        "size" => head.content_length.unwrap_or_default().to_string(),
+        "content-type" => head.content_type.clone().unwrap_or_default(),
+        other => head
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get(&other["meta:".len()..]).cloned())
+            .unwrap_or_default(),
+    };
+    Ok(passed_with(serde_json::json!({ name: value })))
+}
+
+fn delete_object(instance: &Instance, request: &Request) -> Result<String, String> {
+    let key = request.arg(0)?;
+    let response = instance
+        .bucket
+        .delete_object(key)
+        .map_err(|e| format!("DELETE {key} failed: {e}"))?;
+    let status = response.status_code();
+    // S3 deletes are idempotent: 204 for a key that was there and one that
+    // never was. Only a refusal is a failure.
+    if (200..300).contains(&status) || status == 404 {
+        return Ok(passed());
+    }
+    Ok(fatal(
+        &format!("DELETE {key} answered {status}"),
+        Some(exchange_for(instance, "DELETE", key, status, response.bytes())),
+        &request.ctx,
+    ))
+}
+
 todo_step!(
-    download_to_var,
-    save_to_workspace,
-    read_field,
-    delete_object,
     delete_prefix,
     count_prefix,
     presign,
@@ -298,5 +401,29 @@ mod tests {
         ];
         let error = super::headers_from(&Some(table)).expect_err("refused");
         assert!(error.contains("cache-control"), "{error}");
+    }
+
+    #[test]
+    fn saving_under_a_traversing_name_is_refused_before_any_request() {
+        // Step 5 is `I save "<key>" as "<name>"`.
+        let raw = crate::steps::route_for_test(
+            5,
+            &["report.pdf".to_string(), "../escape.pdf".to_string()],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
+        assert_eq!(v["status"], "fatal");
+        assert!(v["error"].as_str().expect("error").contains("escape.pdf"));
+    }
+
+    #[test]
+    fn an_unknown_read_field_is_named_in_the_error() {
+        // Step 6 is `I read "<field>" of "<key>" as "<var>"`.
+        let raw = crate::steps::route_for_test(
+            6,
+            &["colour".to_string(), "report.pdf".to_string(), "v".to_string()],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
+        assert_eq!(v["status"], "fatal");
+        assert!(v["error"].as_str().expect("error").contains("colour"));
     }
 }
