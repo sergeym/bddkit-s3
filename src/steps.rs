@@ -40,8 +40,14 @@ impl Request {
                     .collect()
             }),
             ctx: Ctx {
-                artifacts_dir: value["artifacts_dir"].as_str().unwrap_or_default().to_string(),
-                workspace_dir: value["workspace_dir"].as_str().unwrap_or_default().to_string(),
+                artifacts_dir: value["artifacts_dir"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                workspace_dir: value["workspace_dir"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
                 debug: value["debug"].as_bool().unwrap_or(false),
             },
         }
@@ -140,7 +146,13 @@ fn upload_docstring(instance: &Instance, request: &Request) -> Result<String, St
         .docstring
         .as_deref()
         .ok_or_else(|| "this step needs a doc string for the object body".to_string())?;
-    put(instance, key, body.as_bytes(), &Headers::default(), &request.ctx)
+    put(
+        instance,
+        key,
+        body.as_bytes(),
+        &Headers::default(),
+        &request.ctx,
+    )
 }
 
 fn read_local(path: &std::path::Path) -> Result<Vec<u8>, String> {
@@ -150,7 +162,13 @@ fn read_local(path: &std::path::Path) -> Result<Vec<u8>, String> {
 fn upload_fixture(instance: &Instance, request: &Request) -> Result<String, String> {
     let path = files::fixture(&instance.fixtures_dir, request.arg(0)?);
     let body = read_local(&path)?;
-    put(instance, request.arg(1)?, &body, &Headers::default(), &request.ctx)
+    put(
+        instance,
+        request.arg(1)?,
+        &body,
+        &Headers::default(),
+        &request.ctx,
+    )
 }
 
 fn upload_fixture_with_headers(instance: &Instance, request: &Request) -> Result<String, String> {
@@ -163,7 +181,13 @@ fn upload_fixture_with_headers(instance: &Instance, request: &Request) -> Result
 fn upload_saved(instance: &Instance, request: &Request) -> Result<String, String> {
     let path = files::in_workspace(&request.ctx.workspace_dir, request.arg(0)?)?;
     let body = read_local(&path)?;
-    put(instance, request.arg(1)?, &body, &Headers::default(), &request.ctx)
+    put(
+        instance,
+        request.arg(1)?,
+        &body,
+        &Headers::default(),
+        &request.ctx,
+    )
 }
 
 /// One GET, with the status handed back rather than turned into an error:
@@ -213,10 +237,7 @@ fn read_field(instance: &Instance, request: &Request) -> Result<String, String> 
     // Checked before the request: an unknown field name is the tester's
     // mistake, not something S3 can answer, and a HEAD round trip would only
     // delay the same error.
-    if field != "etag"
-        && field != "size"
-        && field != "content-type"
-        && !field.starts_with("meta:")
+    if field != "etag" && field != "size" && field != "content-type" && !field.starts_with("meta:")
     {
         return Err(format!(
             "unknown field {field:?}: known fields are \"etag\", \"size\", \"content-type\" and \"meta:<name>\""
@@ -260,7 +281,13 @@ fn delete_object(instance: &Instance, request: &Request) -> Result<String, Strin
     }
     Ok(fatal(
         &format!("DELETE {key} answered {status}"),
-        Some(exchange_for(instance, "DELETE", key, status, response.bytes())),
+        Some(exchange_for(
+            instance,
+            "DELETE",
+            key,
+            status,
+            response.bytes(),
+        )),
         &request.ctx,
     ))
 }
@@ -288,7 +315,11 @@ fn should_exist(instance: &Instance, request: &Request) -> Result<String, String
         // The observation succeeded and said "not there, just now". An armed
         // eventual assertion gets another attempt; without one this is a plain
         // failure, which is why the message says what was seen.
-        return Ok(not_yet(&format!("{key} is not in the bucket yet"), None, &request.ctx));
+        return Ok(not_yet(
+            &format!("{key} is not in the bucket yet"),
+            None,
+            &request.ctx,
+        ));
     }
     Ok(fatal(
         &format!("HEAD {key} answered {status}"),
@@ -304,7 +335,11 @@ fn should_not_exist(instance: &Instance, request: &Request) -> Result<String, St
         return Ok(passed());
     }
     if (200..300).contains(&status) {
-        return Ok(not_yet(&format!("{key} is still in the bucket"), None, &request.ctx));
+        return Ok(not_yet(
+            &format!("{key} is still in the bucket"),
+            None,
+            &request.ctx,
+        ));
     }
     Ok(fatal(
         &format!("HEAD {key} answered {status}"),
@@ -355,7 +390,11 @@ fn should_contain(instance: &Instance, request: &Request) -> Result<String, Stri
     if body.contains(needle) {
         return Ok(passed());
     }
-    Ok(not_yet(&format!("{key} does not contain {needle:?}"), None, &request.ctx))
+    Ok(not_yet(
+        &format!("{key} does not contain {needle:?}"),
+        None,
+        &request.ctx,
+    ))
 }
 
 fn should_equal(instance: &Instance, request: &Request) -> Result<String, String> {
@@ -371,7 +410,11 @@ fn should_equal(instance: &Instance, request: &Request) -> Result<String, String
     if body == expected {
         return Ok(passed());
     }
-    Ok(not_yet(&format!("{key} is {body:?}, expected {expected:?}"), None, &request.ctx))
+    Ok(not_yet(
+        &format!("{key} is {body:?}, expected {expected:?}"),
+        None,
+        &request.ctx,
+    ))
 }
 
 /// The two string-valued HEAD-field assertions (content-type, metadata) share
@@ -387,7 +430,11 @@ fn head_field_should_be(
 ) -> Result<String, String> {
     let (status, result) = head(instance, key)?;
     if status == 404 {
-        return Ok(not_yet(&format!("{key} is not in the bucket yet"), None, &request.ctx));
+        return Ok(not_yet(
+            &format!("{key} is not in the bucket yet"),
+            None,
+            &request.ctx,
+        ));
     }
     if !(200..300).contains(&status) {
         return Ok(fatal(
@@ -414,7 +461,11 @@ fn should_have_size(instance: &Instance, request: &Request) -> Result<String, St
         .map_err(|_| format!("{expected:?} is not a whole number of bytes"))?;
     let (status, result) = head(instance, key)?;
     if status == 404 {
-        return Ok(not_yet(&format!("{key} is not in the bucket yet"), None, &request.ctx));
+        return Ok(not_yet(
+            &format!("{key} is not in the bucket yet"),
+            None,
+            &request.ctx,
+        ));
     }
     if !(200..300).contains(&status) {
         return Ok(fatal(
@@ -532,7 +583,10 @@ fn listing_should_contain(instance: &Instance, request: &Request) -> Result<Stri
         return Ok(passed());
     }
     Ok(not_yet(
-        &format!("{key:?} is not under {prefix:?} yet; {} objects are", keys.len()),
+        &format!(
+            "{key:?} is not under {prefix:?} yet; {} objects are",
+            keys.len()
+        ),
         None,
         &request.ctx,
     ))
@@ -576,7 +630,13 @@ fn anonymous_should_be_denied(instance: &Instance, request: &Request) -> Result<
     // A bucket that is readable by anyone is a finding, not a timing problem.
     Ok(fatal(
         &format!("anonymous GET {key} answered {status}, expected 401 or 403"),
-        Some(exchange_for(instance, "GET (anonymous)", key, status, response.bytes())),
+        Some(exchange_for(
+            instance,
+            "GET (anonymous)",
+            key,
+            status,
+            response.bytes(),
+        )),
         &request.ctx,
     ))
 }
@@ -606,7 +666,13 @@ fn foreign_signature_should_be_rejected(
     }
     Ok(fatal(
         &format!("GET {key} signed with a foreign secret answered {status}, expected 401 or 403"),
-        Some(exchange_for(instance, "GET (foreign signature)", key, status, response.bytes())),
+        Some(exchange_for(
+            instance,
+            "GET (foreign signature)",
+            key,
+            status,
+            response.bytes(),
+        )),
         &request.ctx,
     ))
 }
@@ -694,9 +760,15 @@ mod tests {
             &["no-such-file.pdf".to_string(), "report.pdf".to_string()],
         );
         let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
-        assert_eq!(v["status"], "fatal", "a missing local file cannot be waited for");
+        assert_eq!(
+            v["status"], "fatal",
+            "a missing local file cannot be waited for"
+        );
         assert!(
-            v["error"].as_str().expect("error").contains("no-such-file.pdf"),
+            v["error"]
+                .as_str()
+                .expect("error")
+                .contains("no-such-file.pdf"),
             "{}",
             v["error"]
         );
@@ -711,7 +783,10 @@ mod tests {
         ];
         let headers = super::headers_from(&Some(table)).expect("parsed");
         assert_eq!(headers.content_type.as_deref(), Some("application/pdf"));
-        assert_eq!(headers.metadata, vec![("owner".to_string(), "alice".to_string())]);
+        assert_eq!(
+            headers.metadata,
+            vec![("owner".to_string(), "alice".to_string())]
+        );
     }
 
     #[test]
@@ -748,7 +823,10 @@ mod tests {
              answering not_yet here would burn the tester's whole timeout"
         );
         assert!(
-            !v["error"].as_str().expect("error").contains("not implemented"),
+            !v["error"]
+                .as_str()
+                .expect("error")
+                .contains("not implemented"),
             "the step must actually run"
         );
     }
@@ -756,11 +834,15 @@ mod tests {
     #[test]
     fn a_listing_that_cannot_reach_the_server_is_fatal() {
         // Step 18 is `there should be "<n>" objects under "<prefix>"`.
-        let raw =
-            crate::steps::route_for_test(18, &["3".to_string(), "reports/".to_string()]);
+        let raw = crate::steps::route_for_test(18, &["3".to_string(), "reports/".to_string()]);
         let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
         assert_eq!(v["status"], "fatal");
-        assert!(!v["error"].as_str().expect("error").contains("not implemented"));
+        assert!(
+            !v["error"]
+                .as_str()
+                .expect("error")
+                .contains("not implemented")
+        );
     }
 
     #[test]
@@ -768,7 +850,11 @@ mod tests {
         // Step 6 is `I read "<field>" of "<key>" as "<var>"`.
         let raw = crate::steps::route_for_test(
             6,
-            &["colour".to_string(), "report.pdf".to_string(), "v".to_string()],
+            &[
+                "colour".to_string(),
+                "report.pdf".to_string(),
+                "v".to_string(),
+            ],
         );
         let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
         assert_eq!(v["status"], "fatal");

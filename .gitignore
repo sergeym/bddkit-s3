@@ -1,0 +1,5 @@
+/.idea/
+target/
+.mcp.json
+.env.local
+.env.*.local

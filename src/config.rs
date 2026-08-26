@@ -90,8 +90,7 @@ impl InstanceConfig {
             bucket,
             access_key: required_string(config, "access_key")?,
             secret_key: required_string(config, "secret_key")?,
-            region: optional_string(config, "region")?
-                .unwrap_or_else(|| "us-east-1".to_string()),
+            region: optional_string(config, "region")?.unwrap_or_else(|| "us-east-1".to_string()),
             path_style,
             fixtures_dir: optional_string(config, "fixtures_dir")?,
         })
@@ -122,7 +121,10 @@ mod tests {
     fn a_minimal_config_is_accepted_and_defaults_are_applied() {
         let cfg = InstanceConfig::parse(&body("")).expect("valid");
         assert_eq!(cfg.region, "us-east-1");
-        assert!(cfg.path_style, "MinIO is path style, so that is the default");
+        assert!(
+            cfg.path_style,
+            "MinIO is path style, so that is the default"
+        );
         assert_eq!(cfg.fixtures_dir, None);
     }
 
@@ -145,22 +147,20 @@ mod tests {
 
     #[test]
     fn an_endpoint_that_is_not_http_is_rejected() {
-        let error =
-            InstanceConfig::parse(&body(r#"{"endpoint": "localhost:9000"}"#)).expect_err("rejected");
+        let error = InstanceConfig::parse(&body(r#"{"endpoint": "localhost:9000"}"#))
+            .expect_err("rejected");
         assert!(error.contains("endpoint"), "{error}");
     }
 
     #[test]
     fn a_syntactically_invalid_bucket_name_is_rejected() {
-        let error =
-            InstanceConfig::parse(&body(r#"{"bucket": "No_Caps"}"#)).expect_err("rejected");
+        let error = InstanceConfig::parse(&body(r#"{"bucket": "No_Caps"}"#)).expect_err("rejected");
         assert!(error.contains("bucket"), "{error}");
     }
 
     #[test]
     fn a_wrongly_typed_optional_key_is_rejected() {
-        let error =
-            InstanceConfig::parse(&body(r#"{"path_style": "yes"}"#)).expect_err("rejected");
+        let error = InstanceConfig::parse(&body(r#"{"path_style": "yes"}"#)).expect_err("rejected");
         assert!(error.contains("path_style"), "{error}");
     }
 
@@ -194,6 +194,9 @@ mod tests {
         .expect("valid");
         assert_eq!(cfg.region, "eu-central-1");
         assert_eq!(cfg.fixtures_dir.as_deref(), Some("features/files"));
-        assert!(!cfg.path_style, "a real S3 endpoint needs virtual-host style");
+        assert!(
+            !cfg.path_style,
+            "a real S3 endpoint needs virtual-host style"
+        );
     }
 }

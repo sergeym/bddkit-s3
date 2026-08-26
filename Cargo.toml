@@ -1,12 +1,20 @@
-# Its own workspace root on purpose: the parent package must never build this
-# implicitly, and `cargo clippy --all-targets` at the repository root must not
-# see it. It is built explicitly with --manifest-path.
-[workspace]
-
 [package]
 name = "bddkit-s3"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.97"
+description = "S3-compatible object storage steps for the bddkit acceptance-testing tool"
+license = "Apache-2.0"
+repository = "https://github.com/sergeym/bddkit-s3"
+homepage = "https://github.com/sergeym/bddkit-s3"
+readme = "README.md"
+keywords = ["bdd", "gherkin", "testing", "s3", "bddkit"]
+categories = ["development-tools::testing"]
+exclude = [
+    "/.github",
+    "/.idea",
+    "/docker-compose.yml",
+]
 
 [lib]
 crate-type = ["cdylib"]

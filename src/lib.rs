@@ -10,8 +10,8 @@ mod steps;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A handle is an index into this table, never a pointer.
 /// Instances are held behind `Arc` so a step never runs while this lock is
@@ -215,25 +215,44 @@ mod tests {
     fn the_manifest_claims_the_s3_group_and_is_shared() {
         let raw = crate::manifest_json();
         let v: serde_json::Value = serde_json::from_str(&raw).expect("manifest is JSON");
-        assert_eq!(v["name"], "s3", "the lock file entry must name this plugin `s3`");
+        assert_eq!(
+            v["name"], "s3",
+            "the lock file entry must name this plugin `s3`"
+        );
         assert_eq!(v["groups"], serde_json::json!(["s3"]));
         assert_eq!(
             v["concurrency"], "shared",
             "the plugin holds no per-scenario state, so it must not ask for per_worker"
         );
-        assert!(v["version"].is_string(), "a manifest without a version fails the load");
+        assert!(
+            v["version"].is_string(),
+            "a manifest without a version fails the load"
+        );
     }
 
     #[test]
     fn every_step_is_anchored_and_declares_a_known_kind() {
         let raw = crate::steps_json();
         let steps: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("steps are JSON");
-        assert_eq!(steps.len(), 22, "the dispatch match and this table must stay in step");
+        assert_eq!(
+            steps.len(),
+            22,
+            "the dispatch match and this table must stay in step"
+        );
         for (index, step) in steps.iter().enumerate() {
             let pattern = step["pattern"].as_str().expect("pattern is a string");
-            assert!(pattern.starts_with('^'), "step {index} is not anchored: {pattern}");
-            assert!(pattern.ends_with('$'), "step {index} is not anchored: {pattern}");
-            assert_eq!(step["group"], "s3", "step {index} claims a group the manifest does not");
+            assert!(
+                pattern.starts_with('^'),
+                "step {index} is not anchored: {pattern}"
+            );
+            assert!(
+                pattern.ends_with('$'),
+                "step {index} is not anchored: {pattern}"
+            );
+            assert_eq!(
+                step["group"], "s3",
+                "step {index} claims a group the manifest does not"
+            );
             let kind = step["kind"].as_str().expect("kind is a string");
             assert!(
                 kind == "action" || kind == "assertion",

@@ -150,7 +150,11 @@ mod tests {
             status: 404,
             body: "<Error>no such key</Error>".into(),
         };
-        let raw = fatal("the object is missing", Some(ex), &ctx("/tmp/nonexistent-dir"));
+        let raw = fatal(
+            "the object is missing",
+            Some(ex),
+            &ctx("/tmp/nonexistent-dir"),
+        );
         let v: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
         assert_eq!(v["status"], "fatal");
         assert_eq!(v["error"], "the object is missing");

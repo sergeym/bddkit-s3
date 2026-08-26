@@ -5,22 +5,19 @@ as a `bddkit` resource group named `s3`. It targets host ABI version 1
 (`bddkit_abi_version` returns `1`) and declares 22 steps across the `s3` group
 — see [Steps](#steps) below for where the authoritative list lives.
 
-The plugin is written against `docs/plugin-authoring.md` in the `bddkit`
-repository; it must never need the host's source to build or understand.
+The plugin is written against
+[`docs/plugin-authoring.md`](https://github.com/sergeym/bddkit/blob/main/docs/plugin-authoring.md)
+in the `bddkit` repository; it must never need the host's source to build or
+understand.
 
 ## Building
 
-The plugin is its own Cargo workspace (`plugins/bddkit-s3/Cargo.toml` declares
-`[workspace]`), so it is never pulled into the host's build and must be built
-explicitly:
-
 ```bash
-cargo build --manifest-path plugins/bddkit-s3/Cargo.toml --release
+cargo build --release
 ```
 
 This produces a `cdylib`: `libbddkit_s3.so` on Linux, `libbddkit_s3.dylib` on
-macOS, `bddkit_s3.dll` on Windows, under
-`plugins/bddkit-s3/target/release/`.
+macOS, `bddkit_s3.dll` on Windows, under `target/release/`.
 
 ## Installing (hand-written lock file)
 
@@ -34,7 +31,7 @@ library by hand, in one of:
 # .bddkit/plugins.yaml
 plugin:
   - name: s3
-    path: ../../plugins/bddkit-s3/target/release/libbddkit_s3.so
+    path: ../../bddkit-s3/target/release/libbddkit_s3.so
 ```
 
 - `name` must equal the plugin's manifest name, `s3`.
@@ -86,6 +83,25 @@ download/save, reading a single metadata field, delete (single key and whole
 prefix), counting and listing under a prefix, presigning GET/PUT URLs, and
 assertions for existence, content, size, content type, metadata, listing
 membership, and access control (anonymous and foreign-signature refusal).
+
+## Running the end-to-end suite
+
+The acceptance gate for this plugin — the real `bddkit` binary, the real
+plugin loaded from a hand-written lock file, and a real MinIO — lives in the
+`bddkit` repository as `tests/s3.rs`, not in this one. It builds and points
+at whichever plugin manifest `BDDKIT_S3_PLUGIN_MANIFEST` names, so a clone of
+this repository is exercised by checking out `bddkit` alongside it and
+running the suite from there:
+
+```bash
+# in the bddkit checkout, with a sibling checkout of this repository
+docker compose up -d minio-init   # from the bddkit-s3 repository, brings up MinIO
+BDDKIT_S3_PLUGIN_MANIFEST=../bddkit-s3/Cargo.toml \
+  cargo test --test s3 -- --test-threads=1
+```
+
+Without the env var, `bddkit`'s test defaults to a `../bddkit-s3` sibling
+checkout and skips with an explanatory message if neither is present.
 
 ## Known limits
 

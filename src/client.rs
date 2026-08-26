@@ -32,7 +32,11 @@ fn bucket_for(
 ) -> Result<Box<Bucket>, String> {
     let bucket = Bucket::new(name, region, credentials)
         .map_err(|e| format!("cannot build a client for bucket {name:?}: {e}"))?;
-    Ok(if path_style { bucket.with_path_style() } else { bucket })
+    Ok(if path_style {
+        bucket.with_path_style()
+    } else {
+        bucket
+    })
 }
 
 impl Instance {
@@ -130,7 +134,10 @@ mod tests {
     #[test]
     fn foreign_credentials_produce_a_different_signature_than_the_configured_ones() {
         let instance = Instance::connect(&cfg(true)).expect("built");
-        let mine = instance.bucket.presign_get("k.txt", 60, None).expect("presign");
+        let mine = instance
+            .bucket
+            .presign_get("k.txt", 60, None)
+            .expect("presign");
         let theirs = instance
             .with_secret("not-the-secret")
             .expect("built")
