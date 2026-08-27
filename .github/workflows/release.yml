@@ -2,12 +2,13 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing tag to rebuild (for example, v0.1.0)
-        required: true
+      rebuild_tag:
+        description: Existing tag to rebuild (for example, v0.1.0). Leave empty for a normal release.
+        required: false
+        default: ""
         type: string
 
 concurrency:
@@ -18,53 +19,64 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  prepare:
-    name: validate version and create release
+  release:
+    name: publish, tag, and release
+    if: ${{ inputs.rebuild_tag == '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: read
     outputs:
-      tag: ${{ steps.tag.outputs.value }}
+      created: ${{ steps.release-plz.outputs.releases_created }}
+      tag: ${{ steps.release-plz.outputs.releases_created == 'true' && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
     steps:
-      - name: Select tag
-        id: tag
-        env:
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: echo "value=$TAG" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v6
         with:
-          ref: ${{ steps.tag.outputs.value }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: "1.97.1"
           rustflags: ""
 
-      - name: Verify tag matches the plugin version
+      - name: Run release-plz
+        id: release-plz
         env:
-          TAG: ${{ steps.tag.outputs.value }}
-        run: |
-          set -euo pipefail
-          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "bddkit-s3") | .version')"
-          expected="v$version"
-          test "$TAG" = "$expected" || {
-            echo "tag $TAG does not match Cargo.toml version $version" >&2
-            exit 1
-          }
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: release-plz/action@v0.5
+        with:
+          command: release
 
-      - name: Create the GitHub Release when needed
+  release-pr:
+    name: release PR
+    if: ${{ inputs.rebuild_tag == '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          rustflags: ""
+
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.value }}
-        run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --generate-notes
-          fi
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
 
   library:
     name: ${{ matrix.target }}
-    needs: prepare
+    needs: release
+    if: ${{ always() && (inputs.rebuild_tag != '' || needs.release.outputs.created == 'true') }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -86,7 +98,7 @@ jobs:
             os: windows-latest
 
     env:
-      TAG: ${{ needs.prepare.outputs.tag }}
+      TAG: ${{ inputs.rebuild_tag != '' && inputs.rebuild_tag || needs.release.outputs.tag }}
       TARGET: ${{ matrix.target }}
 
     steps:
