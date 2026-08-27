@@ -80,12 +80,18 @@ Unit tests need no external services:
 cargo test --lib
 ```
 
-The end-to-end suite needs a `bddkit` binary and MinIO:
+The end-to-end suite needs a `bddkit` binary and MinIO. Any release from
+0.1.1 on carries the plugin ABI, so the host comes from crates.io:
 
 ```bash
+cargo install bddkit --version 0.1.1 --locked
 docker compose up minio-init
-BDDKIT_BIN=/path/to/bddkit cargo test --test e2e
+cargo test --test e2e
 ```
+
+The binary is looked for in `$BDDKIT_BIN`, then on `PATH`, then in a sibling
+`../bddkit` checkout — set `BDDKIT_BIN` to test against a host you built
+yourself.
 
 `cargo test` runs unit tests and the end-to-end suite when a host is available.
 

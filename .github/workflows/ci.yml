@@ -37,36 +37,30 @@ jobs:
       - name: Unit tests
         run: cargo test --locked
 
-  # Disabled, and not for the reason it looks like: `bddkit` IS published —
-  # `cargo install bddkit` fetches 0.1.0 today. But no published version
-  # carries the plugin ABI at all: `src/plugin/` does not exist on bddkit's
-  # `main`, it lives only on the unmerged plugin branch. A host installed from
-  # crates.io therefore cannot load this plugin, and the job would fail at
-  # load, not at any step.
+  # The host is installed from crates.io at a pinned version, never from a
+  # floating branch: a red run here must mean this plugin broke, not that the
+  # host moved under it. Bump the pin deliberately, as its own commit, so a
+  # failure after the bump is attributable.
   #
-  # Re-enable once a bddkit release contains the plugin ABI. Then install it
-  # by a pinned version (`cargo install bddkit --version <x> --locked`) or a
-  # pinned git revision (`--rev <sha>` / `--tag <tag>`) — never a floating
-  # `--branch`, which would let a change in the host redden this repo's CI and
-  # leave the reader unable to tell which side broke. No version, SHA or tag is
-  # written here because none that satisfies the requirement exists yet.
-  #
-  # e2e:
-  #   name: e2e against MinIO
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #
-  #     - uses: actions-rust-lang/setup-rust-toolchain@v1
-  #       with:
-  #         toolchain: "1.97.1"
-  #         rustflags: ""
-  #
-  #     - name: Install bddkit
-  #       run: cargo install --git https://github.com/sergeym/bddkit bddkit
-  #
-  #     - name: Start MinIO
-  #       run: docker compose up minio-init
-  #
-  #     - name: End-to-end tests
-  #       run: cargo test --locked --test e2e
+  # 0.1.1 is the first release carrying the plugin ABI.
+  e2e:
+    name: e2e against MinIO
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          rustflags: ""
+
+      - name: Install bddkit
+        run: cargo install bddkit --version 0.1.1 --locked
+
+      # Foreground on purpose: `up -d` returns when the containers start, not
+      # when the one-shot bucket creation has finished.
+      - name: Start MinIO
+        run: docker compose up minio-init
+
+      - name: End-to-end tests
+        run: cargo test --locked --test e2e
