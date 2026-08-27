@@ -1,14 +1,7 @@
 # bddkit-s3
 
 A `bddkit` plugin exposing S3-compatible object storage (AWS S3, MinIO, ...)
-as a `bddkit` resource group named `s3`. It targets host ABI version 1
-(`bddkit_abi_version` returns `1`) and declares 22 steps across the `s3` group
-— see [Steps](#steps) below for where the authoritative list lives.
-
-The plugin is written against
-[`docs/plugin-authoring.md`](https://github.com/sergeym/bddkit/blob/main/docs/plugin-authoring.md)
-in the `bddkit` repository; it must never need the host's source to build or
-understand.
+as a `bddkit` resource group named `s3`.
 
 ## Building
 
@@ -16,13 +9,11 @@ understand.
 cargo build --release
 ```
 
-This produces a `cdylib`: `libbddkit_s3.so` on Linux, `libbddkit_s3.dylib` on
-macOS, `bddkit_s3.dll` on Windows, under `target/release/`.
+The library is written to `target/release/`.
 
-## Installing (hand-written lock file)
+## Installing
 
-There is no `bddkit plugin install` yet. Point a lock file at the built
-library by hand, in one of:
+Point a plugin lock file at the built library, in one of:
 
 - `<directory of the --config file>/.bddkit/plugins.yaml` (project scope, takes precedence)
 - `~/.config/bddkit/plugins.yaml` (user scope)
@@ -76,84 +67,49 @@ resources.
 
 ## Steps
 
-The authoritative step list — every pattern this plugin registers, exactly as
-spelled — is `steps_json()` in `src/lib.rs`. It covers upload (docstring,
-local fixture, workspace-saved file, with optional headers/metadata),
-download/save, reading a single metadata field, delete (single key and whole
-prefix), counting and listing under a prefix, presigning GET/PUT URLs, and
-assertions for existence, content, size, content type, metadata, listing
-membership, and access control (anonymous and foreign-signature refusal).
+The plugin provides steps to upload, download, save, delete, count, and list
+objects; read metadata; create presigned GET/PUT URLs; and assert object
+content, size, content type, metadata, listings, and access control. See
+`steps_json()` in `src/lib.rs` for the exact Gherkin patterns.
 
 ## Running the tests
 
-**Unit tests** need nothing — no MinIO, no `bddkit`:
+Unit tests need no external services:
 
 ```bash
-cargo test --lib          # 37 tests
+cargo test --lib
 ```
 
-**The end-to-end suite** (`tests/e2e.rs`) is the acceptance gate: the real
-`bddkit` binary, this plugin loaded from a hand-written lock file, and a real
-MinIO. It needs both of those present.
+The end-to-end suite needs a `bddkit` binary and MinIO:
 
 ```bash
-docker compose up minio-init                  # MinIO + the bucket; blocks until ready
+docker compose up minio-init
 BDDKIT_BIN=/path/to/bddkit cargo test --test e2e
 ```
 
-The `bddkit` binary is looked for in this order: `$BDDKIT_BIN`, then `bddkit`
-on `PATH`, then a sibling checkout's `../bddkit/target/debug/bddkit`. With none
-of them present the suite **skips** and prints why — it does not fail, so a
-clone with no host available still gets a green `cargo test`.
-
-`cargo test` on its own runs both: the unit tests, and the end-to-end suite if
-a host is reachable. Read its output rather than only its exit code — a skipped
-end-to-end suite is reported as passing.
-
-> **`cargo install bddkit` is not enough.** It installs the published release,
-> and no published version of bddkit carries the plugin ABI — `src/plugin/`
-> exists only on the unmerged plugin branch. Until that ships, build the host
-> from a checkout of that branch and point `BDDKIT_BIN` at the result.
+`cargo test` runs unit tests and the end-to-end suite when a host is available.
 
 ## Known limits
 
-These are all real, all deliberate, and discovered during implementation —
-read this before filing a bug for one of them.
-
 1. **No bucket lifecycle steps.** A bucket belongs to a config entry, so a
-   bucket that exists only at runtime could not be addressed. Create buckets
-   with your infrastructure, not with a test.
+   bucket must be created by your infrastructure before the test runs.
 2. **`I presign … valid for "0" seconds` is legal** and yields an
    already-expired URL. A typo of `"0"` for `"60"` therefore fails the *next*
    step, confusingly, rather than the presign step itself.
-3. **`anonymous access to "<key>" should be denied` answers `fatal` on a
-   404**, so pointing it at a key that does not exist reports "answered 404,
-   expected 401 or 403" rather than a missing-object error.
-4. **A missing metadata key and an empty metadata value are indistinguishable**
-   — both compare equal to `""`. This is the same ceiling `bddkit` documents
-   for its own `I extract` step with SQL NULL.
-5. **A failed listing carries no HTTP exchange in its diagnostic.** `rust-s3`
-   parses every response body as a `ListBucketResult` regardless of status; on
-   a non-2xx the body is an S3 `<Error>` document, the XML parse fails, and
-   the status and body are gone before the plugin ever sees them. This is a
-   library ceiling, not a choice made here.
-6. **`I delete all objects under "<prefix>"` lists then deletes**, so it races
-   a parallel feature file writing into the same prefix — the same ceiling as
-   bddkit's own `I delete all "<table>"`. Scope data with `<<unique()>>` or put
-   the files in one `@serial` chain.
-7. **Text assertions reject a non-UTF-8 body** rather than comparing
+3. **A missing metadata key and an empty metadata value are indistinguishable**
+   — both compare equal to `""`.
+4. **`I delete all objects under "<prefix>"` lists then deletes**, so it can
+   race a parallel feature file writing into the same prefix. Scope data with
+   `<<unique()>>` or put the files in one `@serial` chain.
+5. **Text assertions reject a non-UTF-8 body** rather than comparing
    replacement characters; use `I save "<key>" as "<name>"` for binary
    objects.
-8. **There is no debug output yet.** The dispatch payload's `debug` flag is
-   parsed but unused, so `I am in debug mode` does not make this plugin trace
-   its requests.
 
 ## Recipes
 
 ### A presigned URL expires
 
-No plugin step is needed for this — bddkit's own HTTP steps can drive a
-presigned URL, and its eventual-assertion modifier can wait out the expiry:
+Use bddkit's HTTP steps to request a presigned URL and wait for its expiry:
 
 ```gherkin
 When I presign a "GET" url for "report.pdf" valid for "2" seconds as "url"
@@ -161,7 +117,3 @@ And I request "<<url>>" using HTTP GET
 And I expect the next assertion to pass within "10" seconds, checking every "500" milliseconds
 Then the response code is 403
 ```
-
-Verified against a live MinIO: the presigned GET succeeds immediately after
-issue, and once past its 2-second validity the same URL answers 403, which
-the eventual assertion picks up within the 10-second window.
