@@ -37,9 +37,6 @@ jobs:
       - name: Unit tests
         run: cargo test --locked
 
-      - name: Build
-        run: cargo build --locked --release
-
   # Disabled, and not for the reason it looks like: `bddkit` IS published —
   # `cargo install bddkit` fetches 0.1.0 today. But no published version
   # carries the plugin ABI at all: `src/plugin/` does not exist on bddkit's

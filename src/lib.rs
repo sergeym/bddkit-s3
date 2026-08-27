@@ -55,7 +55,13 @@ fn guard(envelope_kind: &str, body: impl FnOnce() -> String) -> *mut c_char {
 }
 
 fn manifest_json() -> String {
-    r#"{"name":"s3","version":"0.1.0","groups":["s3"],"concurrency":"shared"}"#.to_string()
+    serde_json::json!({
+        "name": "s3",
+        "version": env!("CARGO_PKG_VERSION"),
+        "groups": ["s3"],
+        "concurrency": "shared",
+    })
+    .to_string()
 }
 
 /// **The index of a step in this array is its identity** — it is the `u32` the
@@ -228,6 +234,7 @@ mod tests {
             v["version"].is_string(),
             "a manifest without a version fails the load"
         );
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
