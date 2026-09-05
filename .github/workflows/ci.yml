@@ -42,7 +42,15 @@ jobs:
   # host moved under it. Bump the pin deliberately, as its own commit, so a
   # failure after the bump is attributable.
   #
-  # 0.1.1 is the first release carrying the plugin ABI.
+  # 0.1.1 is the first release carrying the plugin ABI. It predates the plugin
+  # config contract, so it ignores the manifest's `fields` and never resolves
+  # `bddkit_probe_config` — which is the property this job pins: the scenario
+  # tests passing here prove both additions stay backward compatible. The three
+  # e2e tests that drive the contract through the host skip on this pin and
+  # start running the moment it is bumped to 0.2.0, the first release that
+  # reads it. Until then the contract is covered from this side instead: the
+  # manifest by unit tests, and the probe by the step below, which needs the
+  # server rather than the host.
   e2e:
     name: e2e against MinIO
     runs-on: ubuntu-latest
@@ -64,3 +72,17 @@ jobs:
 
       - name: End-to-end tests
         run: cargo test --locked --test e2e
+
+      # The unit job above runs these too, but with nothing to reach: the three
+      # live probe cases skip themselves there, and skipping is how they report
+      # it. This is the only place a server exists, so this is the only place
+      # the probe's 2xx, 403 and 404 branches — the three messages the feature
+      # exists to produce — are actually executed. Same credentials as
+      # docker-compose.yml.
+      - name: Probe against MinIO
+        env:
+          BDDKIT_S3_ENDPOINT: http://localhost:9000
+          BDDKIT_S3_BUCKET: apibdd-it
+          BDDKIT_S3_ACCESS_KEY: bddkit
+          BDDKIT_S3_SECRET_KEY: bddkit-secret
+        run: cargo test --locked --lib probe
